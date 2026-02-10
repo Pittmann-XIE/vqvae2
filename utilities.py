@@ -11,7 +11,7 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.utils import save_image
-from sklearn.metrics.ranking import roc_auc_score
+from sklearn.metrics import roc_auc_score
 
 
 class ChestXrayHDF5(Dataset):
@@ -87,7 +87,7 @@ class CXRDataset(Dataset):
         old_size = im.size
         ratio = float(self.img_size) / max(old_size)
         new_size = tuple([int(x * ratio) for x in old_size])
-        im = im.resize(new_size, Image.ANTIALIAS)
+        im = im.resize(new_size, Image.Resampling.LANCZOS)
         # create pads
         image = Image.new("RGB", (self.img_size, self.img_size))
         # paste resized image in the middle of padding
@@ -115,12 +115,15 @@ def recon_image(n_row, original_img, model, save_path, epoch, Tensor):
     original_img = original_img * std + mean
     out = out * std + mean
 
+    # Change 'range=' to 'value_range=' in all three calls
     save_image(original_img.data, f'{save_path}/sample/original.png',
-               nrow=n_row, normalize=True, range=(0, 1))
+            nrow=n_row, normalize=True, value_range=(0, 1))
+
     save_image(out.data, f'{save_path}/sample/{str(epoch + 1).zfill(4)}.png',
-               nrow=n_row, normalize=True, range=(0, 1))
+            nrow=n_row, normalize=True, value_range=(0, 1))
+
     save_image(torch.cat([original_img, out], 0).data, f'{save_path}/sample/flat_{str(epoch + 1).zfill(4)}.png',
-               nrow=n_row**2, normalize=True, range=(0, 1))
+            nrow=n_row**2, normalize=True, value_range=(0, 1))
     model.train()
 
 

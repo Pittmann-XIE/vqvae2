@@ -7,4 +7,3 @@ prototyping_dataset.py
 /file_sizes/*
 /transformed_images/*
 *.onnx
-

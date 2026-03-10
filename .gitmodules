@@ -1,0 +1,3 @@
+[submodule "ViT-VQVAE"]
+	path = ViT-VQVAE
+	url = git@github.com:Pittmann-XIE/ViT-VQVAE.git

@@ -45,7 +45,7 @@ def draw_gaussian(heatmap, center, sigma=2):
     return heatmap
 
 class COCOBottomUpDataset(Dataset):
-    def __init__(self, data_dir, ann_file, img_dir, target_h=242, target_w=424, pad_h=256, pad_w=432, max_people=30, return_orig_for_vis=False):
+    def __init__(self, data_dir, ann_file, img_dir, target_h=242, target_w=424, pad_h=256, pad_w=432, max_people=30, return_orig_for_vis=False, features_dir=None):
         self.img_dir = os.path.join(data_dir, img_dir)
         self.target_h = target_h
         self.target_w = target_w
@@ -77,6 +77,9 @@ class COCOBottomUpDataset(Dataset):
             T.ToTensor(),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        self.features_dir = features_dir
+        if self.features_dir:
+            print(f"[*] Dataset initialized to load precomputed features from {self.features_dir}")
 
     def __len__(self):
         return len(self.valid_img_ids)
@@ -150,11 +153,20 @@ class COCOBottomUpDataset(Dataset):
         pixel_values = self.normalize(canvas) 
         
         output = {
+            'img_id': img_id,                      
             'pixel_values': pixel_values,
             'heatmaps': torch.tensor(heatmaps, dtype=torch.float32),
             'grouped_keypoints': torch.tensor(grouped_keypoints, dtype=torch.float32),
             'raw_image': canvas # Clean RGB target for the Image Reconstruction Decoder
         }
+
+        if self.features_dir:
+            feature_path = os.path.join(self.features_dir, f"{img_id}.pt")
+            # Load the float16 tensor, convert back to float32 for the model
+            output['precomputed_features'] = torch.load(feature_path, weights_only=True).float()
+            # If using precomputed features, we don't strictly need pixel_values anymore
+            # but keeping it doesn't hurt. You can delete it to save CPU-GPU transfer bandwidth.
+            del output['pixel_values']
         
         # Bypasses collation issues when fetching direct samples for visualization
         if self.return_orig_for_vis:

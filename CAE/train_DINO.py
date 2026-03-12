@@ -33,130 +33,82 @@ def print_model_size(model):
     print(f"[*] Trainable : {trainable_params / 1e6:.2f} M parameters")
     print("="*50)
 
-# def calculate_pose_loss(preds, gt_heatmaps, gt_grouped_keypoints, alpha=1e-3):
-#     """
-#     Calculates the Bottom-Up Pose Loss: Heatmap MSE + AE Push/Pull Loss.
-#     """
-#     pred_heatmaps, pred_tags = preds
-    
-#     # 1. Detection Heatmap Loss (MSE)
-#     heatmap_loss = nn.functional.mse_loss(pred_heatmaps, gt_heatmaps)
-    
-#     # 2. Associative Embedding (Push/Pull) Loss
-#     batch_size = pred_tags.size(0)
-#     total_pull_loss = 0.0
-#     total_push_loss = 0.0
-#     valid_batches = 0
-    
-#     for b in range(batch_size):
-#         person_tags = []
-        
-#         # gt_grouped_keypoints: [max_people, 17, 3] -> (x, y, valid)
-#         for p in range(gt_grouped_keypoints.size(1)):
-#             tags_for_this_person = []
-#             for j in range(17):
-#                 x, y, v = gt_grouped_keypoints[b, p, j]
-#                 if v > 0.0:
-#                     # Cast float coords to integer indices
-#                     xi, yi = int(x.item()), int(y.item())
-#                     # Ensure indices are within the 256x432 feature map bounds
-#                     xi = max(0, min(xi, pred_tags.size(3) - 1))
-#                     yi = max(0, min(yi, pred_tags.size(2) - 1))
-                    
-#                     # Read the predicted tag value at this joint's exact location
-#                     tag_val = pred_tags[b, j, yi, xi]
-#                     tags_for_this_person.append(tag_val)
-            
-#             if len(tags_for_this_person) > 0:
-#                 person_tags.append(torch.stack(tags_for_this_person))
-        
-#         if len(person_tags) == 0:
-#             continue
-            
-#         valid_batches += 1
-        
-#         # PULL LOSS: Penalize variance of tags belonging to the same person
-#         pull_loss = 0.0
-#         person_means = []
-#         for tags in person_tags:
-#             mean_tag = tags.mean()
-#             person_means.append(mean_tag)
-#             if len(tags) > 1:
-#                 pull_loss += torch.mean((tags - mean_tag)**2)
-        
-#         pull_loss = pull_loss / len(person_tags)
-#         total_pull_loss += pull_loss
-        
-#         # PUSH LOSS: Penalize if different people have similar mean tags
-#         push_loss = 0.0
-#         if len(person_means) > 1:
-#             person_means = torch.stack(person_means)
-#             # Pairwise differences between all people
-#             diffs = person_means.unsqueeze(1) - person_means.unsqueeze(0)
-#             # Exponential distance penalty (peaks at 1.0 when diff is 0)
-#             push_dist = torch.exp(- (diffs ** 2))
-            
-#             # Zero out the diagonal (we don't penalize a person against themselves)
-#             mask = 1.0 - torch.eye(len(person_means), device=push_dist.device)
-#             push_loss = (push_dist * mask).sum() / (len(person_means) * (len(person_means) - 1))
-        
-#         total_push_loss += push_loss
-        
-#     avg_pull = total_pull_loss / max(1, valid_batches)
-#     avg_push = total_push_loss / max(1, valid_batches)
-    
-#     # Final combined objective function
-#     total_pose_loss = heatmap_loss + alpha * (avg_pull + avg_push)
-    
-#     return total_pose_loss
-
-def calculate_pose_loss_vectorized(preds, gt_heatmaps, gt_grouped_keypoints, alpha=1e-3):
+def calculate_pose_loss(preds, gt_heatmaps, gt_grouped_keypoints, alpha=1e-3):
+    """
+    Calculates the Bottom-Up Pose Loss: Heatmap MSE + AE Push/Pull Loss.
+    """
     pred_heatmaps, pred_tags = preds
+    
+    # 1. Detection Heatmap Loss (MSE)
     heatmap_loss = nn.functional.mse_loss(pred_heatmaps, gt_heatmaps)
     
-    B, K, H, W = pred_tags.shape
-    # gt_grouped_keypoints: [B, MaxPeople, 17, 3] (x, y, valid)
+    # 2. Associative Embedding (Push/Pull) Loss
+    batch_size = pred_tags.size(0)
+    total_pull_loss = 0.0
+    total_push_loss = 0.0
+    valid_batches = 0
     
-    # Extract coordinates and validity
-    coords_x = gt_grouped_keypoints[..., 0].long()
-    coords_y = gt_grouped_keypoints[..., 1].long()
-    valid_mask = gt_grouped_keypoints[..., 2] > 0
+    for b in range(batch_size):
+        person_tags = []
+        
+        # gt_grouped_keypoints: [max_people, 17, 3] -> (x, y, valid)
+        for p in range(gt_grouped_keypoints.size(1)):
+            tags_for_this_person = []
+            for j in range(17):
+                x, y, v = gt_grouped_keypoints[b, p, j]
+                if v > 0.0:
+                    # Cast float coords to integer indices
+                    xi, yi = int(x.item()), int(y.item())
+                    # Ensure indices are within the 256x432 feature map bounds
+                    xi = max(0, min(xi, pred_tags.size(3) - 1))
+                    yi = max(0, min(yi, pred_tags.size(2) - 1))
+                    
+                    # Read the predicted tag value at this joint's exact location
+                    tag_val = pred_tags[b, j, yi, xi]
+                    tags_for_this_person.append(tag_val)
+            
+            if len(tags_for_this_person) > 0:
+                person_tags.append(torch.stack(tags_for_this_person))
+        
+        if len(person_tags) == 0:
+            continue
+            
+        valid_batches += 1
+        
+        # PULL LOSS: Penalize variance of tags belonging to the same person
+        pull_loss = 0.0
+        person_means = []
+        for tags in person_tags:
+            mean_tag = tags.mean()
+            person_means.append(mean_tag)
+            if len(tags) > 1:
+                pull_loss += torch.mean((tags - mean_tag)**2)
+        
+        pull_loss = pull_loss / len(person_tags)
+        total_pull_loss += pull_loss
+        
+        # PUSH LOSS: Penalize if different people have similar mean tags
+        push_loss = 0.0
+        if len(person_means) > 1:
+            person_means = torch.stack(person_means)
+            # Pairwise differences between all people
+            diffs = person_means.unsqueeze(1) - person_means.unsqueeze(0)
+            # Exponential distance penalty (peaks at 1.0 when diff is 0)
+            push_dist = torch.exp(- (diffs ** 2))
+            
+            # Zero out the diagonal (we don't penalize a person against themselves)
+            mask = 1.0 - torch.eye(len(person_means), device=push_dist.device)
+            push_loss = (push_dist * mask).sum() / (len(person_means) * (len(person_means) - 1))
+        
+        total_push_loss += push_loss
+        
+    avg_pull = total_pull_loss / max(1, valid_batches)
+    avg_push = total_push_loss / max(1, valid_batches)
     
-    # Clamp coordinates to safety
-    coords_x = torch.clamp(coords_x, 0, W - 1)
-    coords_y = torch.clamp(coords_y, 0, H - 1)
-
-    # Flatten indices to use advanced indexing: batch_idx, joint_idx, y_idx, x_idx
-    batch_idx = torch.arange(B, device=pred_tags.device).view(B, 1, 1).expand_as(coords_x)
-    joint_idx = torch.arange(K, device=pred_tags.device).view(1, 1, K).expand_as(coords_x)
+    # Final combined objective function
+    total_pose_loss = heatmap_loss + alpha * (avg_pull + avg_push)
     
-    # Get tags for ALL joints in one go
-    # tags shape: [B, MaxPeople, 17]
-    tags = pred_tags[batch_idx, joint_idx, coords_y, coords_x]
-    
-    # Calculate Pull Loss (Variance within person)
-    # Mask out invalid keypoints
-    tags = tags * valid_mask
-    num_valid_per_person = valid_mask.sum(dim=2, keepdim=True)
-    person_means = tags.sum(dim=2, keepdim=True) / num_valid_per_person.clamp(min=1)
-    
-    pull_loss = (tags - person_means)**2
-    pull_loss = (pull_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1)
-    
-    # Push Loss (Distance between different people's means)
-    # [B, MaxPeople, 1]
-    valid_people_mask = (num_valid_per_person > 0).float()
-    diffs = person_means.unsqueeze(2) - person_means.unsqueeze(1) # [B, MaxP, MaxP, 1]
-    push_dist = torch.exp(-(diffs**2))
-    
-    # Mask out diagonal and invalid people
-    eye = torch.eye(person_means.size(1), device=pred_tags.device).view(1, person_means.size(1), person_means.size(1), 1)
-    push_mask = valid_people_mask.unsqueeze(2) * valid_people_mask.unsqueeze(1) * (1 - eye)
-    
-    push_loss = (push_dist * push_mask).sum() / push_mask.sum().clamp(min=1)
-    
-    return heatmap_loss + alpha * (pull_loss + push_loss)
-
+    return total_pose_loss
 
 def plot_losses(history, filename="training_loss_plot.png"):
     plt.figure(figsize=(12, 5))
@@ -220,19 +172,25 @@ def train_cae_model(model, train_dataloader, val_dataloader=None, args=None, dev
         total_recon_loss, recon_batches = 0.0, 0
         
         for batch_idx, batch_data in enumerate(train_dataloader):
-            # 1. Prepare Data
-            pixel_values = batch_data['pixel_values'].to(device)
+            # Gracefully handle either pixel_values OR precomputed_features
+            pixel_values = batch_data.get('pixel_values', None)
+            precomputed_features = batch_data.get('precomputed_features', None)
+            
+            if pixel_values is not None:
+                pixel_values = pixel_values.to(device)
+            if precomputed_features is not None:
+                precomputed_features = precomputed_features.to(device)
+                
             gt_heatmaps = batch_data['heatmaps'].to(device)
             gt_grouped_kpts = batch_data['grouped_keypoints'].to(device)
-            
-            # Extract raw uint8 image, permute to [B, 3, H, W], scale to [0, 1] for L1 Target
             raw_image_target = batch_data['raw_image'].permute(0, 3, 1, 2).float().to(device) / 255.0
             
             optimizer.zero_grad()
             task_name = random.choice(['pose', 'recon'])
             target_ratio = random.uniform(0.1, 1.0) 
             
-            results, z = model(pixel_values, task_name, target_ratio)
+            # Pass BOTH kwargs; the model handles whichever is populated
+            results, z = model(task_name, target_ratio, pixel_values=pixel_values, precomputed_features=precomputed_features)
             
             # 2. Compute Task-Specific Loss
             if task_name == 'pose':
@@ -262,7 +220,7 @@ def train_cae_model(model, train_dataloader, val_dataloader=None, args=None, dev
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
-            if batch_idx % 50 == 0:
+            if batch_idx % 1 == 0:
                 print(f"Epoch[{epoch+1}/{epochs}] Batch {batch_idx} | Task: {task_name.upper():<5} | Ratio: {target_ratio:.2f} | Loss: {loss.item():.4f}")
         
         avg_train_pose = total_pose_loss / max(1, pose_batches)
@@ -275,21 +233,29 @@ def train_cae_model(model, train_dataloader, val_dataloader=None, args=None, dev
         avg_val_pose, avg_val_recon = 0.0, 0.0
         
         # ================= VALIDATION LOOP =================
+
         if run_valid and val_dataloader is not None:
             model.eval()
             val_pose_loss, val_recon_loss = 0.0, 0.0
             
             with torch.no_grad():
                 for batch_data in val_dataloader:
-                    pixel_values = batch_data['pixel_values'].to(device)
+                    pixel_values = batch_data.get('pixel_values', None)
+                    precomputed_features = batch_data.get('precomputed_features', None)
+                    
+                    if pixel_values is not None:
+                        pixel_values = pixel_values.to(device)
+                    if precomputed_features is not None:
+                        precomputed_features = precomputed_features.to(device)
+
                     gt_heatmaps = batch_data['heatmaps'].to(device)
                     gt_grouped_kpts = batch_data['grouped_keypoints'].to(device)
                     raw_image_target = batch_data['raw_image'].permute(0, 3, 1, 2).float().to(device) / 255.0
                     
-                    results_pose, _ = model(pixel_values, 'pose', 1.0)
+                    results_pose, _ = model('pose', 1.0, pixel_values=pixel_values, precomputed_features=precomputed_features)
                     val_pose_loss += calculate_pose_loss(results_pose, gt_heatmaps, gt_grouped_kpts).item()
                     
-                    results_recon, _ = model(pixel_values, 'recon', 1.0)
+                    results_recon, _ = model('recon', 1.0, pixel_values=pixel_values, precomputed_features=precomputed_features)
                     # Compute combined validation recon loss
                     val_l1 = recon_criterion(results_recon, raw_image_target)
                     val_res_scaled = results_recon * 2.0 - 1.0
@@ -334,30 +300,38 @@ def train_cae_model(model, train_dataloader, val_dataloader=None, args=None, dev
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train ConditionalAutoEncoder")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
-    parser.add_argument("--batch-size", type=int, default=64, help="Training batch size") # Lowered default slightly to prevent OOM with DINOv3 + Larger Canvas
+    parser.add_argument("--batch-size", type=int, default=64, help="Training batch size")
     parser.add_argument("--valid", action="store_true", help="Enable validation loop")
     parser.add_argument("--plot-every", type=int, default=20, help="Update loss plot & save checkpoint every N epochs")
     parser.add_argument("--seed", type=int, default=10, help="Random seed for reproducibility")
     parser.add_argument("--save-dir", type=str, default="checkpoints_DINO", help="Directory to save weights")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume training from")
+    
+    # NEW FLAG: cleanly toggle between precomputed features and raw pixels
+    parser.add_argument("--use-precomputed", action="store_true", help="Use precomputed DINO features instead of raw pixels")
+    
     args = parser.parse_args()
 
     set_seed(args.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # 1. Initialize the Model (Updated patch count to 432)
-    cae_model = ConditionalAutoEncoder(hidden_dim=256, max_image_patches=432)
-    cae_model = torch.compile(cae_model)
+    # 1. Initialize the Model (Dynamically respects the CLI flag)
+    cae_model = ConditionalAutoEncoder(hidden_dim=256, max_image_patches=432, use_precomputed_dino=args.use_precomputed)
     print_model_size(cae_model)
     
     # 2. Setup the Data Paths
     DATA_DIR = os.path.expanduser("~/ws_ros2humble-main_lab/vqvae/data_all")
     
+    # Conditionally set feature directories based on the flag
+    train_features_dir = os.path.join(DATA_DIR, "dino_features_train2017") if args.use_precomputed else None
+    val_features_dir = os.path.join(DATA_DIR, "dino_features_val2017") if args.use_precomputed else None
+    
     # 3. Instantiate the Bottom-Up Datasets
     train_dataset = COCOBottomUpDataset(
         data_dir=DATA_DIR,
         ann_file="annotations/person_keypoints_train2017.json", 
-        img_dir="coco/train2017"
+        img_dir="coco/train2017",
+        features_dir=train_features_dir
     )
     
     g = torch.Generator()
@@ -383,7 +357,8 @@ if __name__ == "__main__":
         val_dataset = COCOBottomUpDataset(
             data_dir=DATA_DIR,
             ann_file="annotations/person_keypoints_val2017.json", 
-            img_dir="coco/val2017"
+            img_dir="coco/val2017",
+            features_dir=val_features_dir
         )
         val_loader = DataLoader(
             val_dataset,
